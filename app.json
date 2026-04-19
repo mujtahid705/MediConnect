@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "final_project",
-    "slug": "final_project",
+    "name": "MediConnect",
+    "slug": "mediconnect",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",

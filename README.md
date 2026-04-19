@@ -1,6 +1,6 @@
-# Welcome to your Expo app 👋
+# MediConnect
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A healthcare appointment booking and patient management app built with Expo and React Native.
 
 ## Get started
 
