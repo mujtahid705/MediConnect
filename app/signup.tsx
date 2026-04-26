@@ -1,7 +1,14 @@
-import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
 import {
   ActionButton,
@@ -12,6 +19,8 @@ import {
   InlineNotice,
   useAuthTheme,
 } from "@/components/auth-screen";
+import { useAuth } from "@/context/AuthContext";
+import type { DoctorData, PatientData } from "@/lib/auth-service";
 
 type Role = "patient" | "doctor";
 
@@ -44,7 +53,6 @@ type Errors = {
   institution?: string;
   license?: string;
   degrees?: string;
-  idImages?: string;
 };
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -53,6 +61,12 @@ const phonePattern = /^[+]?\d[\d\s()-]{7,}$/;
 export default function SignupScreen() {
   const router = useRouter();
   const theme = useAuthTheme();
+  const {
+    signUpAsPatient,
+    signUpAsDoctor,
+    error: authError,
+    clearError,
+  } = useAuth();
   const [role, setRole] = useState<Role>("patient");
 
   // Common fields
@@ -60,6 +74,37 @@ export default function SignupScreen() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [dob, setDob] = useState("");
+  const [dobPickerVisible, setDobPickerVisible] = useState(false);
+  const [pickerDay, setPickerDay] = useState(1);
+  const [pickerMonth, setPickerMonth] = useState(1);
+  const [pickerYear, setPickerYear] = useState(2000);
+
+  // Date picker data
+  const MONTHS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const daysInMonth = new Date(pickerYear, pickerMonth, 0).getDate();
+  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+  const years = Array.from({ length: 100 }, (_, i) => 2024 - i);
+
+  const confirmDob = () => {
+    const d = String(pickerDay).padStart(2, "0");
+    const m = String(pickerMonth).padStart(2, "0");
+    setDob(`${pickerYear}-${m}-${d}`);
+    setErrors((e) => ({ ...e, dob: undefined }));
+    setDobPickerVisible(false);
+  };
   const [bloodGroup, setBloodGroup] = useState("");
   const [nid, setNid] = useState("");
   const [address, setAddress] = useState("");
@@ -67,6 +112,7 @@ export default function SignupScreen() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [errors, setErrors] = useState<Errors>({});
   const [loading, setLoading] = useState(false);
+  const [showError, setShowError] = useState(false);
 
   // Patient specific
   const [emergencyContact, setEmergencyContact] = useState("");
@@ -82,8 +128,6 @@ export default function SignupScreen() {
   const [degrees, setDegrees] = useState<DoctorDegree[]>([]);
   const [degreeInput, setDegreeInput] = useState("");
   const [degreeInstitution, setDegreeInstitution] = useState("");
-  const [frontIdUri, setFrontIdUri] = useState<string | null>(null);
-  const [backIdUri, setBackIdUri] = useState<string | null>(null);
 
   const [successVisible, setSuccessVisible] = useState(false);
   const [pendingVisible, setPendingVisible] = useState(false);
@@ -145,10 +189,25 @@ export default function SignupScreen() {
   const validatePatient = (): boolean => {
     if (!validateCommon()) return false;
 
+    // Auto-flush a pending condition the user typed but didn't explicitly add
+    const pendingConditionName = conditionInput.trim();
+    let effectiveConditions = conditions;
+    if (pendingConditionName) {
+      const flushed = {
+        id: Date.now().toString(),
+        name: pendingConditionName,
+        notes: conditionNotes.trim(),
+      };
+      effectiveConditions = [...conditions, flushed];
+      setConditions(effectiveConditions);
+      setConditionInput("");
+      setConditionNotes("");
+    }
+
     const nextErrors: Errors = {};
     if (!emergencyContact.trim())
       nextErrors.emergencyContact = "Emergency contact is required.";
-    if (conditions.length === 0)
+    if (effectiveConditions.length === 0)
       nextErrors.conditions = "Add at least one medical condition.";
 
     setErrors((current) => ({ ...current, ...nextErrors }));
@@ -158,6 +217,22 @@ export default function SignupScreen() {
   const validateDoctor = (): boolean => {
     if (!validateCommon()) return false;
 
+    // Auto-flush a pending degree the user typed but didn't explicitly add
+    const pendingDegreeTitle = degreeInput.trim();
+    const pendingDegreeInst = degreeInstitution.trim();
+    let effectiveDegrees = degrees;
+    if (pendingDegreeTitle && pendingDegreeInst) {
+      const flushed = {
+        id: Date.now().toString(),
+        title: pendingDegreeTitle,
+        institution: pendingDegreeInst,
+      };
+      effectiveDegrees = [...degrees, flushed];
+      setDegrees(effectiveDegrees);
+      setDegreeInput("");
+      setDegreeInstitution("");
+    }
+
     const nextErrors: Errors = {};
     if (!designation.trim())
       nextErrors.designation = "Designation is required.";
@@ -165,24 +240,11 @@ export default function SignupScreen() {
     if (!institution.trim())
       nextErrors.institution = "Institution is required.";
     if (!license.trim()) nextErrors.license = "License number is required.";
-    if (degrees.length === 0) nextErrors.degrees = "Add at least one degree.";
-    if (!frontIdUri || !backIdUri)
-      nextErrors.idImages = "Upload both front and back ID images.";
+    if (effectiveDegrees.length === 0)
+      nextErrors.degrees = "Add at least one degree.";
 
     setErrors((current) => ({ ...current, ...nextErrors }));
     return Object.keys(nextErrors).length === 0;
-  };
-
-  const pickImage = async (setSide: (uri: string) => void) => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      setSide(result.assets[0].uri);
-    }
   };
 
   const addCondition = () => {
@@ -243,22 +305,61 @@ export default function SignupScreen() {
     router.replace("/login");
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (role === "patient") {
       if (!validatePatient()) return;
+
+      setLoading(true);
+      clearError();
+
+      const patientData: PatientData = {
+        fullName: fullName.trim(),
+        phone: phone.trim(),
+        dateOfBirth: dob.trim(),
+        bloodGroup,
+        nid: nid.trim(),
+        address: address.trim(),
+        emergencyContact: emergencyContact.trim(),
+        medicalConditions: conditions,
+      };
+
+      try {
+        await signUpAsPatient(email.trim(), password, patientData);
+        setSuccessVisible(true);
+      } catch {
+        setShowError(true);
+      } finally {
+        setLoading(false);
+      }
     } else {
       if (!validateDoctor()) return;
-    }
 
-    setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      if (role === "patient") {
-        setSuccessVisible(true);
-      } else {
+      setLoading(true);
+      clearError();
+
+      const doctorData: DoctorData = {
+        fullName: fullName.trim(),
+        phone: phone.trim(),
+        dateOfBirth: dob.trim(),
+        bloodGroup,
+        nid: nid.trim(),
+        address: address.trim(),
+        license: license.trim(),
+        designation: designation.trim(),
+        specialty: specialty.trim(),
+        institution: institution.trim(),
+        degrees,
+      };
+
+      try {
+        await signUpAsDoctor(email.trim(), password, doctorData);
         setPendingVisible(true);
+      } catch {
+        setShowError(true);
+      } finally {
+        setLoading(false);
       }
-    }, 1100);
+    }
   };
 
   const renderPatientSection = () => (
@@ -284,29 +385,23 @@ export default function SignupScreen() {
               Add your known conditions
             </Text>
           </View>
-          <Pressable onPress={addCondition}>
-            <Text
-              style={{ fontSize: 20, color: theme.primary, fontWeight: "800" }}
-            >
-              +
-            </Text>
-          </Pressable>
         </View>
 
+        {/* Added entries */}
         {conditions.map((condition) => (
           <View
             key={condition.id}
             style={[styles.conditionRow, { borderColor: theme.border }]}
           >
             <View style={{ flex: 1 }}>
-              <Text style={[{ fontWeight: "700", color: theme.text }]}>
+              <Text style={{ fontWeight: "700", color: theme.text }}>
                 {condition.name}
               </Text>
-              {condition.notes && (
-                <Text style={[{ fontSize: 12, color: theme.muted }]}>
+              {condition.notes ? (
+                <Text style={{ fontSize: 12, color: theme.muted }}>
                   {condition.notes}
                 </Text>
-              )}
+              ) : null}
             </View>
             <Pressable onPress={() => removeCondition(condition.id)}>
               <Text style={{ color: theme.danger, fontSize: 18 }}>−</Text>
@@ -314,35 +409,53 @@ export default function SignupScreen() {
           </View>
         ))}
 
+        {/* Always-visible input block */}
+        <View
+          style={[
+            styles.conditionInputBlock,
+            { backgroundColor: theme.cardSoft, borderColor: theme.border },
+          ]}
+        >
+          <AuthField
+            label="Condition name"
+            value={conditionInput}
+            onChangeText={(t) => {
+              setConditionInput(t);
+              fieldErrorSetter("conditions")();
+            }}
+            placeholder="e.g., Asthma, Diabetes"
+          />
+          <AuthField
+            label="Notes (optional)"
+            value={conditionNotes}
+            onChangeText={setConditionNotes}
+            placeholder="Any relevant details"
+            multiline
+            numberOfLines={2}
+          />
+          <TouchableOpacity
+            onPress={addCondition}
+            style={[
+              styles.inlineAddBtn,
+              {
+                backgroundColor: theme.primarySoft,
+                borderColor: theme.primary,
+              },
+            ]}
+          >
+            <Text
+              style={{ color: theme.primary, fontWeight: "700", fontSize: 13 }}
+            >
+              + Add condition
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         {conditions.length > 0 && (
           <InlineNotice
             icon="checkmark-circle"
             title={`${conditions.length} condition(s) added`}
           />
-        )}
-
-        {conditions.length === 0 && (
-          <View
-            style={[
-              styles.conditionInputBlock,
-              { backgroundColor: theme.cardSoft, borderColor: theme.border },
-            ]}
-          >
-            <AuthField
-              label="Condition name"
-              value={conditionInput}
-              onChangeText={setConditionInput}
-              placeholder="e.g., Asthma, Diabetes"
-            />
-            <AuthField
-              label="Notes (optional)"
-              value={conditionNotes}
-              onChangeText={setConditionNotes}
-              placeholder="Any relevant details"
-              multiline
-              numberOfLines={2}
-            />
-          </View>
         )}
 
         {errors.conditions && (
@@ -410,25 +523,19 @@ export default function SignupScreen() {
               Add your qualifications
             </Text>
           </View>
-          <Pressable onPress={addDegree}>
-            <Text
-              style={{ fontSize: 20, color: theme.primary, fontWeight: "800" }}
-            >
-              +
-            </Text>
-          </Pressable>
         </View>
 
+        {/* Added entries */}
         {degrees.map((degree) => (
           <View
             key={degree.id}
             style={[styles.degreeRow, { borderColor: theme.border }]}
           >
             <View style={{ flex: 1 }}>
-              <Text style={[{ fontWeight: "700", color: theme.text }]}>
+              <Text style={{ fontWeight: "700", color: theme.text }}>
                 {degree.title}
               </Text>
-              <Text style={[{ fontSize: 12, color: theme.muted }]}>
+              <Text style={{ fontSize: 12, color: theme.muted }}>
                 {degree.institution}
               </Text>
             </View>
@@ -438,102 +545,56 @@ export default function SignupScreen() {
           </View>
         ))}
 
-        {degrees.length === 0 && (
-          <View
+        {/* Always-visible input block */}
+        <View
+          style={[
+            styles.degreeInputBlock,
+            { backgroundColor: theme.cardSoft, borderColor: theme.border },
+          ]}
+        >
+          <AuthField
+            label="Degree title"
+            value={degreeInput}
+            onChangeText={(t) => {
+              setDegreeInput(t);
+              fieldErrorSetter("degrees")();
+            }}
+            placeholder="e.g., MBBS, MD"
+          />
+          <AuthField
+            label="Institution"
+            value={degreeInstitution}
+            onChangeText={setDegreeInstitution}
+            placeholder="University or institution"
+          />
+          <TouchableOpacity
+            onPress={addDegree}
             style={[
-              styles.degreeInputBlock,
-              { backgroundColor: theme.cardSoft, borderColor: theme.border },
+              styles.inlineAddBtn,
+              {
+                backgroundColor: theme.primarySoft,
+                borderColor: theme.primary,
+              },
             ]}
           >
-            <AuthField
-              label="Degree title"
-              value={degreeInput}
-              onChangeText={setDegreeInput}
-              placeholder="e.g., MBBS, MD"
-            />
-            <AuthField
-              label="Institution"
-              value={degreeInstitution}
-              onChangeText={setDegreeInstitution}
-              placeholder="University or institution"
-            />
-          </View>
+            <Text
+              style={{ color: theme.primary, fontWeight: "700", fontSize: 13 }}
+            >
+              + Add degree
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {degrees.length > 0 && (
+          <InlineNotice
+            icon="checkmark-circle"
+            title={`${degrees.length} degree(s) added`}
+          />
         )}
 
         {errors.degrees && (
           <Text style={[styles.fieldError, { color: theme.danger }]}>
             {errors.degrees}
-          </Text>
-        )}
-      </View>
-
-      <View style={{ gap: 12 }}>
-        <Text style={[styles.sectionTitle, { color: theme.text }]}>
-          Identity documents
-        </Text>
-        <Pressable
-          onPress={() => pickImage(setFrontIdUri)}
-          style={[
-            styles.imageUploadButton,
-            {
-              backgroundColor: frontIdUri ? theme.primarySoft : theme.cardSoft,
-              borderColor: frontIdUri ? theme.primary : theme.border,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              { fontSize: 28 },
-              { color: frontIdUri ? theme.primary : theme.muted },
-            ]}
-          >
-            📸
-          </Text>
-          <Text
-            style={[
-              {
-                color: frontIdUri ? theme.primary : theme.muted,
-                fontWeight: "600",
-              },
-            ]}
-          >
-            {frontIdUri ? "Front uploaded" : "Upload front ID"}
-          </Text>
-        </Pressable>
-
-        <Pressable
-          onPress={() => pickImage(setBackIdUri)}
-          style={[
-            styles.imageUploadButton,
-            {
-              backgroundColor: backIdUri ? theme.primarySoft : theme.cardSoft,
-              borderColor: backIdUri ? theme.primary : theme.border,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              { fontSize: 28 },
-              { color: backIdUri ? theme.primary : theme.muted },
-            ]}
-          >
-            📸
-          </Text>
-          <Text
-            style={[
-              {
-                color: backIdUri ? theme.primary : theme.muted,
-                fontWeight: "600",
-              },
-            ]}
-          >
-            {backIdUri ? "Back uploaded" : "Upload back ID"}
-          </Text>
-        </Pressable>
-
-        {errors.idImages && (
-          <Text style={[styles.fieldError, { color: theme.danger }]}>
-            {errors.idImages}
           </Text>
         )}
       </View>
@@ -616,16 +677,33 @@ export default function SignupScreen() {
         error={errors.phone}
       />
 
-      <AuthField
-        label="Date of birth"
-        value={dob}
-        onChangeText={(text) => {
-          setDob(text);
-          fieldErrorSetter("dob")();
-        }}
-        placeholder="YYYY-MM-DD"
-        error={errors.dob}
-      />
+      <Pressable
+        onPress={() => setDobPickerVisible(true)}
+        style={[
+          styles.dobPressable,
+          {
+            backgroundColor: theme.cardSoft,
+            borderColor: errors.dob ? theme.danger : theme.border,
+          },
+        ]}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.dobLabel, { color: theme.muted }]}>
+            Date of birth
+          </Text>
+          <Text
+            style={[styles.dobValue, { color: dob ? theme.text : theme.muted }]}
+          >
+            {dob || "Select date"}
+          </Text>
+        </View>
+        <Text style={{ fontSize: 18 }}>📅</Text>
+      </Pressable>
+      {errors.dob && (
+        <Text style={[styles.fieldError, { color: theme.danger }]}>
+          {errors.dob}
+        </Text>
+      )}
 
       <View style={{ gap: 8 }}>
         <Text style={[styles.fieldLabel, { color: theme.text }]}>
@@ -739,6 +817,191 @@ export default function SignupScreen() {
         primaryLabel="Back to login"
         onPrimary={finishDoctorSignup}
       />
+
+      <FeedbackModal
+        visible={showError}
+        tone="warning"
+        title="Signup failed"
+        message={
+          authError || "An error occurred during signup. Please try again."
+        }
+        primaryLabel="OK"
+        onPrimary={() => {
+          setShowError(false);
+          clearError();
+        }}
+      />
+
+      {/* DOB Date Picker Modal */}
+      <Modal
+        visible={dobPickerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDobPickerVisible(false)}
+      >
+        <View style={styles.dobPickerOverlay}>
+          <View
+            style={[
+              styles.dobPickerSheet,
+              { backgroundColor: theme.background },
+            ]}
+          >
+            <View
+              style={[
+                styles.dobPickerHandle,
+                { backgroundColor: theme.border },
+              ]}
+            />
+            <View
+              style={[
+                styles.dobPickerHeader,
+                { borderBottomColor: theme.border },
+              ]}
+            >
+              <Text
+                style={{ fontWeight: "700", fontSize: 16, color: theme.text }}
+              >
+                Select Date of Birth
+              </Text>
+              <Pressable onPress={() => setDobPickerVisible(false)}>
+                <Text style={{ color: theme.muted, fontSize: 14 }}>Cancel</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.dobPickerColumns}>
+              {/* Day */}
+              <View style={styles.dobPickerColumn}>
+                <Text
+                  style={[styles.dobPickerColumnLabel, { color: theme.muted }]}
+                >
+                  Day
+                </Text>
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  {days.map((dv) => (
+                    <Pressable
+                      key={dv}
+                      onPress={() => setPickerDay(dv)}
+                      style={[
+                        styles.dobPickerItem,
+                        {
+                          backgroundColor:
+                            pickerDay === dv
+                              ? theme.primarySoft
+                              : "transparent",
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.dobPickerItemText,
+                          {
+                            color:
+                              pickerDay === dv ? theme.primary : theme.text,
+                            fontWeight: pickerDay === dv ? "800" : "400",
+                          },
+                        ]}
+                      >
+                        {String(dv).padStart(2, "0")}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* Month */}
+              <View style={styles.dobPickerColumn}>
+                <Text
+                  style={[styles.dobPickerColumnLabel, { color: theme.muted }]}
+                >
+                  Month
+                </Text>
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  {MONTHS.map((mv, idx) => (
+                    <Pressable
+                      key={mv}
+                      onPress={() => setPickerMonth(idx + 1)}
+                      style={[
+                        styles.dobPickerItem,
+                        {
+                          backgroundColor:
+                            pickerMonth === idx + 1
+                              ? theme.primarySoft
+                              : "transparent",
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.dobPickerItemText,
+                          {
+                            color:
+                              pickerMonth === idx + 1
+                                ? theme.primary
+                                : theme.text,
+                            fontWeight: pickerMonth === idx + 1 ? "800" : "400",
+                          },
+                        ]}
+                      >
+                        {mv}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* Year */}
+              <View style={styles.dobPickerColumn}>
+                <Text
+                  style={[styles.dobPickerColumnLabel, { color: theme.muted }]}
+                >
+                  Year
+                </Text>
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  {years.map((yv) => (
+                    <Pressable
+                      key={yv}
+                      onPress={() => setPickerYear(yv)}
+                      style={[
+                        styles.dobPickerItem,
+                        {
+                          backgroundColor:
+                            pickerYear === yv
+                              ? theme.primarySoft
+                              : "transparent",
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.dobPickerItemText,
+                          {
+                            color:
+                              pickerYear === yv ? theme.primary : theme.text,
+                            fontWeight: pickerYear === yv ? "800" : "400",
+                          },
+                        ]}
+                      >
+                        {yv}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              onPress={confirmDob}
+              style={[styles.dobConfirmBtn, { backgroundColor: theme.primary }]}
+            >
+              <Text
+                style={{ color: "#FFFFFF", fontWeight: "700", fontSize: 15 }}
+              >
+                Confirm
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </AuthScreen>
   );
 }
@@ -747,6 +1010,25 @@ const styles = StyleSheet.create({
   roleRow: {
     flexDirection: "row",
     gap: 12,
+  },
+  // DOB picker pressable
+  dobPressable: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  dobLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    marginBottom: 2,
+  },
+  dobValue: {
+    fontSize: 14,
+    fontWeight: "500",
   },
   bloodPill: {
     paddingVertical: 10,
@@ -810,6 +1092,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 8,
   },
+  inlineAddBtn: {
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingVertical: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   imageUploadButton: {
     borderRadius: 12,
     borderWidth: 1.5,
@@ -818,5 +1107,67 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
+  },
+  // Date picker modal
+  dobPickerOverlay: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.45)",
+  },
+  dobPickerSheet: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 32,
+  },
+  dobPickerHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    alignSelf: "center",
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  dobPickerHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  dobPickerColumns: {
+    flexDirection: "row",
+    height: 200,
+    marginHorizontal: 16,
+    marginTop: 8,
+  },
+  dobPickerColumn: {
+    flex: 1,
+    alignItems: "center",
+  },
+  dobPickerColumnLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  dobPickerItem: {
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+    width: "100%",
+    borderRadius: 8,
+  },
+  dobPickerItemText: {
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  dobConfirmBtn: {
+    marginHorizontal: 20,
+    marginTop: 16,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
   },
 });

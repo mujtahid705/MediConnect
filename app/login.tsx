@@ -8,6 +8,7 @@ import {
   AuthScreen,
   FeedbackModal,
 } from "@/components/auth-screen";
+import { useAuth } from "@/context/AuthContext";
 
 type Errors = {
   identifier?: string;
@@ -15,16 +16,17 @@ type Errors = {
 };
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const phonePattern = /^[+]?\d[\d\s()-]{7,}$/;
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { signIn, error: authError, clearError } = useAuth();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<Errors>({});
   const [loading, setLoading] = useState(false);
   const [loginSuccessVisible, setLoginSuccessVisible] = useState(false);
   const [forgotPasswordVisible, setForgotPasswordVisible] = useState(false);
+  const [showError, setShowError] = useState(false);
 
   const validate = () => {
     const nextErrors: Errors = {};
@@ -32,12 +34,9 @@ export default function LoginScreen() {
     const cleanPassword = password.trim();
 
     if (!cleanIdentifier) {
-      nextErrors.identifier = "Enter your email address or phone number.";
-    } else if (
-      !emailPattern.test(cleanIdentifier) &&
-      !phonePattern.test(cleanIdentifier)
-    ) {
-      nextErrors.identifier = "Use a valid email address or phone number.";
+      nextErrors.identifier = "Enter your email address.";
+    } else if (!emailPattern.test(cleanIdentifier)) {
+      nextErrors.identifier = "Please enter a valid email address.";
     }
 
     if (!cleanPassword) {
@@ -50,16 +49,21 @@ export default function LoginScreen() {
     return Object.keys(nextErrors).length === 0;
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!validate()) {
       return;
     }
 
-    setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      setLoading(true);
+      clearError();
+      await signIn(identifier.trim(), password);
       setLoginSuccessVisible(true);
-    }, 1100);
+    } catch (err) {
+      setShowError(true);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const continueToDashboard = () => {
@@ -96,7 +100,7 @@ export default function LoginScreen() {
       }
     >
       <AuthField
-        label="Email or phone"
+        label="Email"
         value={identifier}
         onChangeText={(text) => {
           setIdentifier(text);
@@ -104,7 +108,7 @@ export default function LoginScreen() {
             setErrors((current) => ({ ...current, identifier: undefined }));
           }
         }}
-        placeholder="Email or phone"
+        placeholder="your.email@example.com"
         keyboardType="email-address"
         autoComplete="email"
         error={errors.identifier}
@@ -140,6 +144,20 @@ export default function LoginScreen() {
         message="Password recovery will be available soon."
         primaryLabel="OK"
         onPrimary={() => setForgotPasswordVisible(false)}
+      />
+
+      <FeedbackModal
+        visible={showError}
+        tone="warning"
+        title="Login failed"
+        message={
+          authError || "An error occurred during login. Please try again."
+        }
+        primaryLabel="OK"
+        onPrimary={() => {
+          setShowError(false);
+          clearError();
+        }}
       />
     </AuthScreen>
   );
